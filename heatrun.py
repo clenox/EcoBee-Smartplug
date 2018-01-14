@@ -97,7 +97,7 @@ print(tempdict)
 
 #  To do - replace hard coded IP addresses with file read.  Use the pyhs100 utility to find your plug ip addresses.  Replaced here with dummies.
 
-plugip_dict = {'MBED':'192.168.0.14','OBED':'192.168.0.25','LBED':'192.168.0.15'}
+plugip_dict = {'MBED':'XXX.XXX.X.XX','OBED':'XXX.XXX.X.XX','LBED':'XXX.XXX.X.XX'}
 
 # Assign smart plug objects
 
