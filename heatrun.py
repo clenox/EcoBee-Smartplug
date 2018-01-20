@@ -97,7 +97,7 @@ print(tempdict)
 
 #  To do - replace hard coded IP addresses with file read.  Use the pyhs100 utility to find your plug ip addresses.  Replaced here with dummies.
 
-plugip_dict = {'MBED':'XXX.XXX.X.XX','OBED':'XXX.XXX.X.XX','LBED':'XXX.XXX.X.XX'}
+plugip_dict = {'MBED':'192.168.0.14','OBED':'192.168.0.25','LBED':'192.168.0.15'}
 
 # Assign smart plug objects
 
@@ -125,9 +125,9 @@ class Room:
 # Time setpoints in decimal hours, 24 hour time
 # Note:  All time logic here assumes start after noon and end before noon!
 
-mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.4, 66.2, 20.5, 7.5)
-lbed = Room('LBED', tempdict['LBED'], 'OFF', 67.0, 66.8, 19.75, 7.5)
-obed = Room('OBED', tempdict['OBED'], 'OFF', 67.0, 66.8, 19.75, 7.5)
+mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.8, 66.6, 20.25, 8.0)
+lbed = Room('LBED', tempdict['LBED'], 'OFF', 67.0, 66.8, 19.75, 8.0)
+obed = Room('OBED', tempdict['OBED'], 'OFF', 67.0, 66.8, 19.75, 8.0)
 
 rooms = [mbed,lbed,obed]
 
@@ -206,9 +206,9 @@ while True:
 
             to_err = False
 
-        except TimeoutError:
+        except:
 
-            err_string = (str(timestamp) + ' Timeout error in ecobee data call') + "\r"
+            err_string = (str(timestamp) + 'Error in ecobee data call') + "\r"
 
             print(err_string)
 
@@ -216,9 +216,11 @@ while True:
             log.write(err_string)
             log.close()
 
+            sleep(30)
+
             to_err = True
 
-            break
+            continue
 
         data = response.json()
 
@@ -278,8 +280,6 @@ while True:
 
             lbed_turn = True
 
-        print(lbed_turn," lbed temp: ", lbed.temp," obed temp: ", obed.temp)
-
         # Handle loss of communication with plugs
 
         try:
@@ -319,36 +319,38 @@ while True:
             if obed.status == 'ON' and lbed.status == 'ON' and lbed_turn is True:
 
                 obed_plug.state = 'OFF'
+                sleep(5)
                 lbed_plug.state = 'ON'
                 lbed_turn = False
-                print('1 alternating obed OFF lbed ON')
+                print('Alternating obed OFF lbed ON')
 
             elif obed.status == 'ON' and lbed.status == 'ON' and lbed_turn is False:
 
-                obed_plug.state = 'ON'
                 lbed_plug.state = 'OFF'
+                sleep(5)
+                obed_plug.state = 'ON'
                 lbed_turn = True
-                print('2 alternating obed ON lbed OFF')
+                print('Alternating obed ON lbed OFF')
 
             else:
 
                 obed_plug.state = obed.status
                 lbed_plug.state = lbed.status
-                print('3 Operating per status')
+                print('Operating per status')
 
         elif obed_plug_err is True and lbed_plug_err is False:
 
             lbed_plug.state = lbed.status
-            print('4 lbed per status, obed offline')
+            print('lbed per status, obed offline')
 
         elif lbed_plug_err is True and obed_plug_err is False:
 
             obed_plug.state = obed.status
-            print('5 obed per status, lbed offline')
+            print('obed per status, lbed offline')
 
         else:
 
-            print('6 obed and lbed offline')
+            print('obed and lbed offline')
 
         sleep(looptime)
 
