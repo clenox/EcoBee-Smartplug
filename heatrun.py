@@ -78,6 +78,7 @@ data = response.json()
 
 namelist = []
 templist = []
+temps= []
 
 i = 0
 while i < len(data['thermostatList'][0]['remoteSensors']):
@@ -85,7 +86,17 @@ while i < len(data['thermostatList'][0]['remoteSensors']):
     templist.append(data['thermostatList'][0]['remoteSensors'][i]['capability'][0]['value'])
     i = i + 1
 
-temps = [float(i) / 10 for i in templist]
+for item in templist:
+
+    try:
+
+        tval = float(item) / 10
+    
+    except ValueError:
+    
+        tval = 'badvalue'
+
+    temps.append(tval)
 
 # Remove the Home sensor which is not used.  This implementation has 3 named sensors MBED, OBED and LBED
 
@@ -125,9 +136,9 @@ class Room:
 # Time setpoints in decimal hours, 24 hour time
 # Note:  All time logic here assumes start after noon and end before noon!
 
-mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.8, 66.6, 20.25, 8.0)
-lbed = Room('LBED', tempdict['LBED'], 'OFF', 67.0, 66.8, 19.75, 8.0)
-obed = Room('OBED', tempdict['OBED'], 'OFF', 67.0, 66.8, 19.75, 8.0)
+mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.8, 66.6, 20.25, 11.99)
+lbed = Room('LBED', tempdict['LBED'], 'OFF', 67.0, 66.8, 19.75, 11.99)
+obed = Room('OBED', tempdict['OBED'], 'OFF', 67.0, 66.8, 19.75, 11.99)
 
 rooms = [mbed,lbed,obed]
 
@@ -157,6 +168,10 @@ looptime = 180
 # Start main loop
 
 while True:
+
+    # Set sleep indicator for one-time print of mode
+
+    sleepind = 0
 
     # time handling
 
@@ -225,13 +240,25 @@ while True:
         data = response.json()
 
         templist = []
+        temps = []
 
         i = 0
         while i < len(data['thermostatList'][0]['remoteSensors']):
             templist.append(data['thermostatList'][0]['remoteSensors'][i]['capability'][0]['value'])
             i = i + 1
 
-        temps = [float(i) / 10 for i in templist]
+        for item in templist:
+
+            try:
+
+                tval = float(item) / 10
+    
+            except ValueError:
+    
+                tval = 'badvalue'
+
+            temps.append(tval)
+
         tempdict = dict(zip(namelist, temps))
 
         # Assign updated temps to rooms
@@ -243,7 +270,13 @@ while True:
             # Decision logic and set booleans for switches
             # Plug status is updated separately from state to reduce calls to plug endpoints and allow rotation of heater operation per below
 
-            if roomdict[name].temp <= roomdict[name].temp_low and (dectime >= roomdict[name].on_from or dectime <= roomdict[name].on_to):
+            if roomdict[name].temp == 'badvalue':
+
+                print('Warning:  bad temp reading in ', name)
+
+                roomdict[name].status = roomdict[name].status
+
+            elif roomdict[name].temp <= roomdict[name].temp_low and (dectime >= roomdict[name].on_from or dectime <= roomdict[name].on_to):
 
                 roomdict[name].status = "ON"
 
@@ -356,18 +389,26 @@ while True:
 
 # If outside of the schedule enter sleep mode.  No logging in sleep mode.
 
-    for name in namelist:
+    if sleepind == 0:
 
-        if(roomdict[name].status) == 'ON':
+        print('Sleep Mode')
 
-            try:
+        sleepind = 1
 
-                plugdict[name].state = 'OFF'
-                roomdict[name].status = plugdict[name].state
-                print(roomdict[name],'turned off')
+    else:
 
-            except:
+        for name in namelist:
 
-                print('warning, ',roomdict[name],' offline -- could not be turned off automatically')
+            if(roomdict[name].status) == 'ON':
+
+                try:
+
+                    plugdict[name].state = 'OFF'
+                    roomdict[name].status = plugdict[name].state
+                    print(roomdict[name],'turned off')
+
+                except:
+
+                    print('warning, ',roomdict[name],' offline -- could not be turned off automatically')
 
     sleep(looptime)
