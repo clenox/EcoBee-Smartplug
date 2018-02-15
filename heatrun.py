@@ -108,7 +108,7 @@ print(tempdict)
 
 #  To do - replace hard coded IP addresses with file read.  Use the pyhs100 utility to find your plug ip addresses.  Replaced here with dummies.
 
-plugip_dict = {'MBED':'192.168.0.14','OBED':'192.168.0.25','LBED':'192.168.0.15'}
+plugip_dict = {'MBED':'XXX.XXX.X.XX','OBED':'XXX.XXX.X.XX','LBED':'XXX.XXX.X.XX'}
 
 # Assign smart plug objects
 
@@ -136,9 +136,9 @@ class Room:
 # Time setpoints in decimal hours, 24 hour time
 # Note:  All time logic here assumes start after noon and end before noon!
 
-mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.8, 66.6, 20.25, 11.99)
-lbed = Room('LBED', tempdict['LBED'], 'OFF', 67.0, 66.8, 19.75, 11.99)
-obed = Room('OBED', tempdict['OBED'], 'OFF', 67.0, 66.8, 19.75, 11.99)
+mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.8, 66.6, 20.25, 8.0)
+lbed = Room('LBED', tempdict['LBED'], 'OFF', 67.0, 66.8, 19.75, 8.0)
+obed = Room('OBED', tempdict['OBED'], 'OFF', 67.0, 66.8, 19.75, 8.0)
 
 rooms = [mbed,lbed,obed]
 
