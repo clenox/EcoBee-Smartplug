@@ -13,6 +13,8 @@ from pyHS100 import SmartPlug
 
 to_err = False
 
+sched = True
+
 # Read developer key from file apikey.txt, set scope
 
 a = open("apikey.txt", "r")
@@ -108,7 +110,7 @@ print(tempdict)
 
 #  To do - replace hard coded IP addresses with file read.  Use the pyhs100 utility to find your plug ip addresses.  Replaced here with dummies.
 
-plugip_dict = {'MBED':'XXX.XXX.X.XX','OBED':'XXX.XXX.X.XX','LBED':'XXX.XXX.X.XX'}
+plugip_dict = {'MBED':'192.168.0.14','OBED':'192.168.0.25','LBED':'192.168.0.15'}
 
 # Assign smart plug objects
 
@@ -136,9 +138,9 @@ class Room:
 # Time setpoints in decimal hours, 24 hour time
 # Note:  All time logic here assumes start after noon and end before noon!
 
-mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.8, 66.6, 20.25, 8.0)
-lbed = Room('LBED', tempdict['LBED'], 'OFF', 67.0, 66.8, 19.75, 8.0)
-obed = Room('OBED', tempdict['OBED'], 'OFF', 67.0, 66.8, 19.75, 8.0)
+mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.6, 66.6, 20.25, 8.0)
+lbed = Room('LBED', tempdict['LBED'], 'OFF', 66.8, 66.8, 19.75, 8.0)
+obed = Room('OBED', tempdict['OBED'], 'OFF', 66.8, 66.8, 19.75, 8.0)
 
 rooms = [mbed,lbed,obed]
 
@@ -169,9 +171,6 @@ looptime = 180
 
 while True:
 
-    # Set sleep indicator for one-time print of mode
-
-    sleepind = 0
 
     # time handling
 
@@ -389,26 +388,28 @@ while True:
 
 # If outside of the schedule enter sleep mode.  No logging in sleep mode.
 
-    if sleepind == 0:
+    if sched is True:
 
         print('Sleep Mode')
 
-        sleepind = 1
+        sched = False
 
     else:
 
-        for name in namelist:
+        pass
 
-            if(roomdict[name].status) == 'ON':
+    for name in namelist:
 
-                try:
+        if(roomdict[name].status) == 'ON':
 
-                    plugdict[name].state = 'OFF'
-                    roomdict[name].status = plugdict[name].state
-                    print(roomdict[name],'turned off')
+            try:
 
-                except:
+                plugdict[name].state = 'OFF'
+                roomdict[name].status = plugdict[name].state
+                print(roomdict[name],'turned off')
 
-                    print('warning, ',roomdict[name],' offline -- could not be turned off automatically')
+            except:
+
+                print('warning, ',roomdict[name],' offline -- could not be turned off automatically')
 
     sleep(looptime)
