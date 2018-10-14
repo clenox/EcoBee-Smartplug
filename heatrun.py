@@ -12,6 +12,7 @@ from twilio.rest import Client
 from pyHS100 import SmartPlug, Discover
 from auth import creds
 
+#TODO - check unused variables
 
 def main():
 
@@ -31,28 +32,6 @@ def main():
 
         pass
 
-
-    #TODO - delete old token code after testing
-
-    #f = open("tokens.txt", "r")
-
-    #token_str = str(f.read())
-
-    #f.close()
-
-    #token_list = token_str.split(",")
-
-    #try:
-
-        #access_token = token_list[0]
-        #token_type = token_list[1]
-        #refresh_token = token_list[2]
-
-    #except IndexError:
-
-        #sys.exit('Token File Read Error')
-
-    #auth = token_type + ' ' + access_token
 
     # time handling for error message
 
@@ -251,28 +230,6 @@ def main():
 
             sched = True
 
-        # TODO delete old code once testing complete
-
-         #   f = open("tokens.txt", "r")
-
-         #   token_str = str(f.read())
-
-         #   f.close()
-
-         #   token_list = token_str.split(",")
-
-         #   try:
-
-         #       access_token = token_list[0]
-         #       token_type = token_list[1]
-         #       refresh_token = token_list[2]
-
-        #    except IndexError:
-
-         #       sys.exit('Token File Read Error')
-
-         #   auth = token_type + ' ' + access_token
-
             # Call EcoBee API to get data
 
             try:
@@ -285,7 +242,7 @@ def main():
 
                 # Add requests
 
-                to_err = False #TODO - confirm this is not used & delete
+                to_err = False
 
                 data = response.json()
 
