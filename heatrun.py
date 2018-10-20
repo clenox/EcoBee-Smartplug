@@ -595,7 +595,7 @@ def ecobee_tokens(retry):
             #token_str = str(f.read())
             #f.close()
 
-            print(token_str)
+         #   print(token_str)
 
             return auth
 
