@@ -1,8 +1,9 @@
 # Set up libraries
 
 import datetime
+from datetime import timedelta
 import sys
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as et
 from time import sleep
 import certifi
 import requests
@@ -12,7 +13,9 @@ from twilio.rest import Client
 from pyHS100 import SmartPlug, Discover
 from auth import creds
 
-#TODO - check unused variables
+looptime = 180
+token_refresh_loops = 180 / looptime
+
 
 def main():
 
@@ -22,28 +25,25 @@ def main():
 
     auth_dict = creds()
 
-    auth = ecobee_tokens(0)
+    # Fresh tokens on program start
 
-    if auth == 'NA':
+    ecobee_token_response = ecobee_tokens(True, datetime.datetime.min)
 
-        sys.exit('Bad token file')
-
-    else:
-
-        pass
-
-
-    # time handling for error message
-
-    timestamp = '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
+    auth = ecobee_token_response[0]
+    last_refresh_time = ecobee_token_response[1]
 
     #  Set up Ohmconnect call
 
     http = urllib3.PoolManager(cert_reqs='CERT_REQUIRED', ca_certs=certifi.where())
 
-    OH = False
+    oh = False
 
     # Initial ecobee API call to populate room class
+    # TODO - refactor Ecobee API call and error handling (make consistent) as function
+
+    # timestamp for error message
+
+    timestamp = '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
 
     try:
 
@@ -52,8 +52,6 @@ def main():
         header = {'Content-Type': 'application/json;charset=UTF-8', 'Authorization': auth}
 
         response = requests.get(thermostat_url, headers=header, params=payload)
-
-        to_err = False
 
     except TimeoutError:
 
@@ -66,33 +64,21 @@ def main():
         log.write(err_string)
         log.close()
 
-        to_err = True
-
     data = response.json()
 
-    # Populate lists used to build dicts.
+    # Build temperature sensor dictionary
 
-    sensornames = []
-    sensortemps = []
-    temps = []
+    tempdict = get_sensors(data)
+    sensornames = list(tempdict.keys())
 
-    for i in range(len(data['thermostatList'][0]['remoteSensors'])):
-        sensornames.append(data['thermostatList'][0]['remoteSensors'][i]['name'])
-        sensortemps.append(data['thermostatList'][0]['remoteSensors'][i]['capability'][0]['value'])
+    if len(tempdict) == 0:
 
-    for item in sensortemps:
+        print(data)
+        sys.exit("no temperature sensors detected")
 
-        try:
+    else:
 
-            tval = float(item) / 10
-
-        except ValueError:
-
-            tval = 'badvalue'
-
-        temps.append(tval)
-
-    tempdict = dict(zip(sensornames, temps))
+        pass
 
     #  Discover smart plug names and IP addresses.  Names of rooms, sensors, and plugs must match.
 
@@ -117,7 +103,8 @@ def main():
 
     named_flag = True
 
-    # Assign ip addresses to controlled plugs.  Match the plug's assigned names (in Kasa app) to the plug object name.
+    # Assign ip addresses to controlled plugs.
+    # Must match the plug's assigned names (in Kasa app) to the plug object name.
 
     try:
         mbed_plug = SmartPlug(plugip['MBED'])
@@ -149,7 +136,6 @@ def main():
             self.on_from = on_from
             self.on_to = on_to
 
-
     # Set schedule and temperature band
     # Temp setpoints in F.
     # temp_high is top of setpoint deadband, temp_low is bottom of deadband
@@ -160,16 +146,16 @@ def main():
     lbed = Room('LBED', tempdict['LBED'], 'OFF', 66.4, 66.4, 19.75, 7.5)
     obed = Room('OBED', tempdict['OBED'], 'OFF', 66.4, 66.4, 19.75, 7.5)
 
-    # Define setback for Ohmhour DR event.  Must be a negative number.
+    # Define setback temperature for Ohmhour DR event.  Must be a negative number.
 
     setback = -3.0
 
     # Define rooms and room dictionary
 
-    roomdict = {'MBED': mbed,'LBED': lbed,'OBED': obed}
+    roomdict = {'MBED': mbed, 'LBED': lbed, 'OBED': obed}
 
     # Initialize schedule bounds -- the earliest start and latest end of schedule for all rooms
-    #  Used to determine when in active vs. sleep mode overall
+    # Used to determine when in active vs. sleep mode overall
 
     start_time = mbed.on_from
     end_time = mbed.on_to
@@ -184,14 +170,9 @@ def main():
 
             end_time = roomdict[name].on_to
 
+# Initialize error counter
 
-    # Define loop time increment ... timeout between hitting APIs, 180 sec minimum per EcoBee
-
-    looptime = 180
-
-    token_refresh_loops = 3600 / looptime
-    token_refresh_count = 0
-    retry = 0
+    sensor_error_count = 0
 
     # Start main loop
 
@@ -199,31 +180,27 @@ def main():
 
         # Token refresh
 
-        if token_refresh_count < token_refresh_loops:
+        ecobee_token_response = ecobee_tokens(False, last_refresh_time)
 
-            token_refresh_count = token_refresh_count + 1
-
-        else:
-
-            auth_temp = ecobee_tokens(retry)
-
-            if auth_temp == 'NA':
-
-                retry = retry + 1
-                print('debug - auth NA')
-
-            else:
-
-                auth = auth_temp
-                retry = 0
-                token_refresh_count = 0
+        last_refresh_time = ecobee_token_response[1]
 
         # time handling
 
         timestamp = '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
         dectime = float(timestamp[11:13]) + float(timestamp[14:16]) / 60
 
+        # Portion of loop inside schedule bounds
+
         while dectime >= start_time or dectime <= end_time:
+
+            # Token refresh
+
+            ecobee_token_response = ecobee_tokens(False, last_refresh_time)
+
+            auth = ecobee_token_response[0]
+            last_refresh_time = ecobee_token_response[1]
+
+            # Time handling in loop
 
             timestamp = '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
             dectime = float(timestamp[11:13]) + float(timestamp[14:16]) / 60
@@ -231,6 +208,7 @@ def main():
             sched = True
 
             # Call EcoBee API to get data
+            # TODO refactor as function
 
             try:
 
@@ -240,10 +218,6 @@ def main():
 
                 response = requests.get(thermostat_url, headers=header, params=payload)
 
-                # Add requests
-
-                to_err = False
-
                 data = response.json()
 
             except:
@@ -252,47 +226,51 @@ def main():
 
                 print(err_string)
 
-                statusmsg = 'Ecobee data call error'
-
                 sleep(30)
-
-                to_err = True
 
                 continue
 
             #  Update temperature readings
 
-            sensornames = []
-            sensortemps = []
-            temps = []
+            tempdict = get_sensors(data)
 
-            for i in range(len(data['thermostatList'][0]['remoteSensors'])):
-                sensornames.append(data['thermostatList'][0]['remoteSensors'][i]['name'])
-                sensortemps.append(data['thermostatList'][0]['remoteSensors'][i]['capability'][0]['value'])
+            if len(tempdict) == 0:
 
-            for item in sensortemps:
+                print(data)
+                sensor_error_count = sensor_error_count + 1
 
-                try:
+                if sensor_error_count == 1:
 
-                    tval = float(item) / 10
+                    send_twilio_msg("Warning - sensor temps not updating")
 
-                except ValueError:
+                elif sensor_error_count == 11:
 
-                    tval = 'badvalue'
+                    send_twilio_msg("Temp reading failure.  Program exited.")
+                    sys.exit("Temp reading failure.  Program exited.")
 
-                temps.append(tval)
+                else:
 
-            tempdict = dict(zip(sensornames, temps))
+                    pass
 
-            dt = datetime.datetime.now()
+                sleep(60)
 
-            hr = datetime.timedelta(hours=dt.hour, minutes=0, seconds=0)
+                continue
 
-            timediff = dt - hr
+            else:
 
-            OC_state = 'False'
+                if sensor_error_count > 0:
 
-            #  Get Ohm connect status
+                    send_twilio_msg("Sensor issue resolved")
+
+                else:
+
+                    pass
+
+                sensor_error_count = 0
+
+                pass
+
+            #  Get Ohmconnect status
 
             try:
 
@@ -302,13 +280,13 @@ def main():
 
                 data = r.data
 
-                root = ET.fromstring(data)
+                root = et.fromstring(data)
 
-                OC_state = root[1].text
+                oc_state = root[1].text
 
             except:
 
-                OC_state = 'False'
+                oc_state = 'False'
 
             for name in namelist:
 
@@ -321,23 +299,23 @@ def main():
 
                 #  Set back temperature thresholds when Ohnhour detected
 
-                if OC_state == 'True':
+                if oc_state == 'True':
 
                     roomdict[name].temp_high = roomdict[name].temp_high + setback
                     roomdict[name].temp_low = roomdict[name].temp_low + setback
-                    OH = True
+                    oh = True
 
-                elif OH == True:
+                elif oh is True:
 
                     roomdict[name].temp_high = roomdict[name].temp_high - setback
                     roomdict[name].temp_low = roomdict[name].temp_low - setback
-                    OH = False
+                    oh = False
 
                 else:
 
                     pass
 
-                #  End setback logic
+                #  Determine each room's status (On or Off)
 
                 if roomdict[name].temp == 'badvalue':
 
@@ -345,11 +323,13 @@ def main():
 
                     roomdict[name].status = roomdict[name].status
 
-                elif roomdict[name].temp <= roomdict[name].temp_low and (dectime >= roomdict[name].on_from or dectime <= roomdict[name].on_to):
+                elif roomdict[name].temp <= roomdict[name].temp_low \
+                        and (dectime >= roomdict[name].on_from or dectime <= roomdict[name].on_to):
 
                     roomdict[name].status = "ON"
 
-                elif roomdict[name].temp > roomdict[name].temp_high or (dectime < roomdict[name].on_from and dectime > roomdict[name].on_to):
+                elif roomdict[name].temp > roomdict[name].temp_high or dectime < roomdict[name].on_from \
+                        or dectime > roomdict[name].on_to:
 
                     roomdict[name].status = "OFF"
 
@@ -357,24 +337,13 @@ def main():
 
                     roomdict[name].status = roomdict[name].status
 
-            # For LBED and OBED determine which will operate when both are in ON state.
-            # In this implementation these heaters are on a single breaker.
-            # This breaker trips if both are running simultaneously.
-
-            if obed.temp < lbed.temp:
-
-                lbed_turn = False
-
-            else:
-
-                lbed_turn = True
-
-            # Handle loss of communication with plugs
+            # Check & handle loss of communication with plugs
 
             try:
 
                 mbed_plug.state = mbed.status
-                mbed_plug_err = False
+            #   mbed_plug_err = False
+            #   Not currently used
 
             except:
 
@@ -383,15 +352,17 @@ def main():
                 try:
                     mbed_plug = SmartPlug(plugip['MBED'])
                     print(mbed_plug)
-                    mbed_plug_err = False
+                #   mbed_plug_err = False
+                #   Not currently used
 
                 except:
                     print('mbed plug error')
-                    mbed_plug_err = True
+                #   mbed_plug_err = True
+                #   Not currently used
 
             try:
 
-                obed_plug_chk = obed_plug.state
+                obed_plug_chk = obed_plug.state  # variable only used to force API call
                 obed_plug_err = False
 
             except:
@@ -409,7 +380,7 @@ def main():
 
             try:
 
-                lbed_plug_chk = lbed_plug.state
+                lbed_plug_chk = lbed_plug.state  # variable only used to force API call
                 lbed_plug_err = False
 
             except:
@@ -425,6 +396,19 @@ def main():
                     print('lbed plug error')
                     lbed_plug_err = True
 
+            # For LBED and OBED rooms determine which will operate when both are in ON state.
+            # In my house two heaters are on a single circuit breaker.
+            # This breaker trips if both are running simultaneously.
+            # The section is specific to this situation.
+
+            if obed.temp < lbed.temp:
+
+                lbed_turn = False
+
+            else:
+
+                lbed_turn = True
+
             # Determine plug states - this logic actually turns the plugs on or off.
 
             if obed_plug_err is False and lbed_plug_err is False:
@@ -434,7 +418,7 @@ def main():
                     obed_plug.state = 'OFF'
                     sleep(5)
                     lbed_plug.state = 'ON'
-                    lbed_turn = False
+                    lbed_turn = False  # Variable is actually used due to looping
                     statusmsg = 'Alternating obed OFF lbed ON'
 
                 elif obed.status == 'ON' and lbed.status == 'ON' and lbed_turn is False:
@@ -442,7 +426,7 @@ def main():
                     lbed_plug.state = 'OFF'
                     sleep(5)
                     obed_plug.state = 'ON'
-                    lbed_turn = True
+                    lbed_turn = True  # Variable is actually used due to looping
                     statusmsg = 'Alternating obed ON lbed OFF'
 
                 else:
@@ -471,13 +455,13 @@ def main():
                         ", OBED, " + str(roomdict['OBED'].temp) + ", " + str(roomdict['OBED'].status) +
                         ", LBED, " + str(roomdict['LBED'].temp) + ", " + str(roomdict['LBED'].status) +
                         ", Status" + ", " + statusmsg +
-                        ", OhmConnect Status" + ", " + OC_state + "\n")
+                        ", OhmConnect Status" + ", " + oc_state + "\n")
 
             log = open("log.txt", "a+")
             log.write(log_str)
             log.close()
 
-            # TODO REWORK TO MAKE MORE FRIENDLY
+            # TODO REWORK TO MAKE MORE READABLE
 
             print('Latest Timestamp: ', log_str + "\r")
 
@@ -488,6 +472,8 @@ def main():
         if sched is True:
 
             print('Sleep Mode')
+
+            # Turn all plugs off if possible
 
             for name in namelist:
 
@@ -501,7 +487,11 @@ def main():
 
                     except:
 
-                        print('warning, ', roomdict[name], ' offline -- could not be turned off automatically')
+                        overrun_warn_msg = str(
+                            'Warning, {0} offline -- could not be turned off automatically'.format(str(roomdict[name])))
+
+                        send_twilio_msg(overrun_warn_msg)
+                        print(overrun_warn_msg)
 
             sched = False
 
@@ -520,7 +510,7 @@ def get_plugs(plugip, plugnames, named_flag):
             plugobj = SmartPlug(dev)
             plugip[plugobj.alias] = dev
 
-            if named_flag == False:
+            if named_flag is False:
 
                 plugnames.append(plugobj.alias)
 
@@ -530,17 +520,65 @@ def get_plugs(plugip, plugnames, named_flag):
 
         return [plugip, plugnames]
 
-
     except:
 
         print('plug discovery failed')
 
 
-def ecobee_tokens(retry):
+def get_sensors(data):
+
+    sensornames = []
+    sensortemps = []
+    temps = []
+    tempdict = {}
+    sensor_detect = True
+
+    try:
+
+        for i in range(len(data['thermostatList'][0]['remoteSensors'])):
+            sensornames.append(data['thermostatList'][0]['remoteSensors'][i]['name'])
+            sensortemps.append(data['thermostatList'][0]['remoteSensors'][i]['capability'][0]['value'])
+
+    except:
+
+        sensor_detect = False
+
+    if sensor_detect is True:
+
+        for item in sensortemps:
+
+            try:
+
+                tval = float(item) / 10
+
+            except ValueError:
+
+                tval = 'badvalue'
+
+            temps.append(tval)
+
+        tempdict = dict(zip(sensornames, temps))
+
+    else:
+
+        pass
+
+    return tempdict
+
+
+def ecobee_tokens(loop_count_reset, last_refresh_time):
 
     app_key = creds()['ecobee_apikey']
 
-    # open token file store & retrieve refresh token
+    retry_count = 0
+
+    token_interval_time = timedelta(minutes=30) # If less than looptime, refresh interval will be looptime interval
+                                                # Tokens expire after 3600 seconds
+    current_time = datetime.datetime.now()
+
+    elapsed_time = current_time - last_refresh_time
+
+    # open token file store & retrieve current tokens
 
     f = open("tokens.txt", "r")
 
@@ -550,79 +588,83 @@ def ecobee_tokens(retry):
 
     token_list = token_str.split(",")
 
-    try:
+    auth = token_list[1]+' '+token_list[0]
 
-        refresh_token = token_list[2]
+    while retry_count <= 10:
 
-    except IndexError:
+        if elapsed_time >= token_interval_time or loop_count_reset is True:
 
-        send_twilio_msg('Heatrun Error -- Bad Ecobee Token File')
-        sys.exit('Token File Read Error')
+            try:
 
-    token_url = 'https://api.ecobee.com/token?'
-    payload = {'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': app_key}
+                refresh_token = token_list[2]
 
-    try:
+            except IndexError:
 
-        r_refresh = requests.post(token_url, params=payload)
+                send_twilio_msg('Heatrun Error -- Bad Ecobee Token File')
+                sys.exit('Token File Read Error')
 
-        # print(r_refresh.text)
+            token_url = 'https://api.ecobee.com/token?'
+            payload = {'grant_type': 'refresh_token', 'refresh_token': refresh_token, 'client_id': app_key}
 
-        r_refresh_dict = json.loads(r_refresh.text)
+            try:
 
-        #    print(r_refresh_dict)
+                r_refresh = requests.post(token_url, params=payload)
 
-        if r_refresh.status_code == requests.codes.ok:
+                r_refresh_dict = json.loads(r_refresh.text)
 
-            token_type = r_refresh_dict['token_type']
-            access_token = r_refresh_dict['access_token']
-            refresh_token = r_refresh_dict['refresh_token']
+                print(r_refresh_dict)
 
-            auth_log = access_token + "," + token_type + "," + refresh_token
+                if r_refresh.status_code == requests.codes.ok:
 
-            auth = (token_type) + ' ' + (access_token)
+                    token_type = r_refresh_dict['token_type']
+                    access_token = r_refresh_dict['access_token']
+                    refresh_token = r_refresh_dict['refresh_token']
 
-            #        print(r_refresh.status_code)
+                    auth_log = access_token + "," + token_type + "," + refresh_token
 
-            # write new tokens to file store
+                    auth = token_type + ' ' + access_token
 
-            f = open("tokens.txt", "w+")
-            f.truncate()
-            f.write(auth_log)
+                    # write new tokens to file store
 
-            #   verify stored tokens are good
+                    f = open("tokens.txt", "w+")
+                    f.truncate()
+                    f.write(auth_log)
 
-            #token_str = str(f.read())
-            #f.close()
+                    retry_count = 0
+                    last_refresh_time = datetime.datetime.now()
 
-         #   print(token_str)
+                    break
 
-            return auth
+                else:
+
+                    raise ValueError(r_refresh.status_code)
+
+            except:
+
+                if retry_count == 0:
+
+                    retry_count = retry_count + 1
+                    send_twilio_msg('Warning - Ecobee token issue.  Retrying for 10 minutes.')
+                    sleep(60)
+
+                elif retry_count <= 10:
+
+                    retry_count = retry_count + 1
+                    sleep(60)
+
+                else:
+
+                    send_twilio_msg('Ecobee token refresh failed - restart manually!')
+                    sys.exit('token refresh error')
+
+                continue
 
         else:
 
-            raise ValueError(r_refresh.status_code)
+            break
 
-    except:
+    return (auth, last_refresh_time)
 
-        if retry <= 20:
-
-            auth = 'NA'
-
-            if retry == 0:
-
-                send_twilio_msg('Warning - Ecobee token issue.  Retrying ...')
-
-            else:
-
-                pass
-
-            return auth
-
-        else:
-
-            send_twilio_msg('Ecobee token refresh failed - restart manually!')
-            sys.exit('token refresh error')
 
 def send_twilio_msg(alert_msg):
 
@@ -643,6 +685,7 @@ def send_twilio_msg(alert_msg):
 
     return True
 
-if __name__== "__main__":
+
+if __name__ == "__main__":
 
     main()
