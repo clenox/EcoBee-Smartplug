@@ -11,6 +11,8 @@ Supports text message push for issues / events -- must have Twilio account.
 
 Integrates with Ohmconnect to respond to Ohmconnect events -- must have Ohmconnect account.
 
-auth.py needs to be updated with keys -- ecobee developer api key, twilio keys & phone numbers, and ohmconnect URL.
+auth.py needs to be updated with keys -- ecobee developer api key, twilio keys & phone numbers, and ohmconnect URL.  You will need to set yourself up as a developer on the ecobee site to get the api key.
 
-You will need to use the new_tokens.py utility to issue EcoBee tokens the first time and create the tokens.txt file (see readme for new_tokens.py).  Once the tokens.txt file is created for the first time (with valid tokens), heatrun.py will refresh these tokens.
+Before using heatrun.py for the first time, or if tokens have expired, use the new_tokens.py utility to issue EcoBee tokens and create / update the tokens.txt file where access and refresh tokens are stored.  The utility requests an authorization PIN, this is issued from the Ecobee customer portal (under the My Apps) section when you authorize a new app.
+
+Once the tokens.txt file is created for the first time (with valid tokens), heatrun.py will refresh these tokens.
