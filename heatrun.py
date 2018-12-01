@@ -36,7 +36,7 @@ def main():
 
     http = urllib3.PoolManager(cert_reqs='CERT_REQUIRED', ca_certs=certifi.where())
 
-    oh = False
+    oc = [False]
 
     # Initial ecobee API call to populate room class
     # TODO - refactor Ecobee API call and error handling (make consistent) as function
@@ -70,6 +70,8 @@ def main():
 
     tempdict = get_sensors(data)
     sensornames = list(tempdict.keys())
+
+#    print(tempdict)
 
     if len(tempdict) == 0:
 
@@ -136,15 +138,15 @@ def main():
             self.on_from = on_from
             self.on_to = on_to
 
-    # Set schedule and temperature band
+    # Initialize schedule and temperature band
     # Temp setpoints in F.
     # temp_high is top of setpoint deadband, temp_low is bottom of deadband
     # Time setpoints in decimal hours, 24 hour time
     # Note:  All time logic here assumes start after noon and end before noon!
 
-    mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.4, 66.4, 20.5, 7.5)
-    lbed = Room('LBED', tempdict['LBED'], 'OFF', 66.4, 66.4, 19.75, 7.5)
-    obed = Room('OBED', tempdict['OBED'], 'OFF', 66.4, 66.4, 19.75, 7.5)
+    mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.6, 66.4, 20.5, 7.5)
+    lbed = Room('LBED', tempdict['LBED'], 'OFF', 66.6, 66.4, 19.75, 7.5)
+    obed = Room('OBED', tempdict['OBED'], 'OFF', 66.6, 66.4, 19.75, 7.5)
 
     # Define setback temperature for Ohmhour DR event.  Must be a negative number.
 
@@ -282,11 +284,36 @@ def main():
 
                 root = et.fromstring(data)
 
-                oc_state = root[1].text
+                oc_txt = root[1].text
+
+                if oc_txt == 'True':
+
+                    oc_state = True
+
+                else:
+
+                    oc_state = False
 
             except:
 
-                oc_state = 'False'
+                oc_state = False
+
+            #TODO use dequeue insted
+
+            oc.insert(0,oc_state)
+            last_oc = oc.pop()
+
+            if oc_state == last_oc:
+
+                offset = 0
+
+            elif oc_state == True:
+
+                offset = setback
+
+            else:
+
+                offset = -setback
 
             for name in namelist:
 
@@ -295,25 +322,14 @@ def main():
                 # Decision logic and set booleans for switches
                 # Plug status is updated separately from state to reduce calls to plug endpoints
                 # and allow rotation of heater operation per below
-                # Determine Ohmconnect state and setback
+                # Determine Ohmconnect state and setback offset
 
-                #  Set back temperature thresholds when Ohnhour detected
+                roomdict[name].temp_high = roomdict[name].temp_high + offset
+                roomdict[name].temp_low = roomdict[name].temp_low + offset
 
-                if oc_state == 'True':
+                # Temp issue debug statement
 
-                    roomdict[name].temp_high = roomdict[name].temp_high + setback
-                    roomdict[name].temp_low = roomdict[name].temp_low + setback
-                    oh = True
-
-                elif oh is True:
-
-                    roomdict[name].temp_high = roomdict[name].temp_high - setback
-                    roomdict[name].temp_low = roomdict[name].temp_low - setback
-                    oh = False
-
-                else:
-
-                    pass
+     #           print(name,' ','current temp: ',roomdict[name].temp,' upper: ',roomdict[name].temp_high,' lower: ',roomdict[name].temp_low)
 
                 #  Determine each room's status (On or Off)
 
@@ -455,7 +471,7 @@ def main():
                         ", OBED, " + str(roomdict['OBED'].temp) + ", " + str(roomdict['OBED'].status) +
                         ", LBED, " + str(roomdict['LBED'].temp) + ", " + str(roomdict['LBED'].status) +
                         ", Status" + ", " + statusmsg +
-                        ", OhmConnect Status" + ", " + oc_state + "\n")
+                        ", OhmConnect Status" + ", " + oc_txt + "\n")
 
             log = open("log.txt", "a+")
             log.write(log_str)
@@ -522,7 +538,8 @@ def get_plugs(plugip, plugnames, named_flag):
 
     except:
 
-        print('plug discovery failed')
+        send_twilio_msg('plug discovery failed')
+        sys.exit('plug discovery failed')
 
 
 def get_sensors(data):
@@ -588,7 +605,15 @@ def ecobee_tokens(loop_count_reset, last_refresh_time):
 
     token_list = token_str.split(",")
 
-    auth = token_list[1]+' '+token_list[0]
+    try:
+
+        auth = token_list[1]+' '+token_list[0]
+
+    except IndexError:
+
+        send_twilio_msg('Heatrun Error -- Bad Ecobee Token File')
+        print("bad tokens:", token_str)
+        sys.exit('Token File Read Error')
 
     while retry_count <= 10:
 
@@ -624,11 +649,22 @@ def ecobee_tokens(loop_count_reset, last_refresh_time):
 
                     auth = token_type + ' ' + access_token
 
+                    # Check tokens are received
+
+                    if len(auth_log) == 0:
+
+                        raise ValueError("Empty token refresh")
+
+                    else:
+
+                        pass
+
                     # write new tokens to file store
 
                     f = open("tokens.txt", "w+")
                     f.truncate()
                     f.write(auth_log)
+                    f.close()
 
                     retry_count = 0
                     last_refresh_time = datetime.datetime.now()
