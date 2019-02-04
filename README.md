@@ -16,3 +16,5 @@ auth.py needs to be updated with keys -- ecobee developer api key, twilio keys &
 Before using heatrun.py for the first time, or if tokens have expired, use the new_tokens.py utility to issue EcoBee tokens and create / update the tokens.txt file where access and refresh tokens are stored.  The utility requests an authorization PIN, this is issued from the Ecobee customer portal (under the My Apps) section when you authorize a new app.
 
 Once the tokens.txt file is created for the first time (with valid tokens), heatrun.py will refresh these tokens.
+
+NEW Schedule file.  For now this is manually edited (see notes on this file).  It is a step towards a scheduling GUI.
