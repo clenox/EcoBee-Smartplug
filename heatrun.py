@@ -3,6 +3,8 @@
 import datetime
 from datetime import timedelta
 import sys
+import os
+import importlib
 import xml.etree.ElementTree as et
 from time import sleep
 import certifi
@@ -12,6 +14,9 @@ import json
 from twilio.rest import Client
 from pyHS100 import SmartPlug, Discover
 from auth import creds
+import traceback
+import schedule
+from schedule import schedule
 
 looptime = 180
 token_refresh_loops = 180 / looptime
@@ -19,31 +24,33 @@ token_refresh_loops = 180 / looptime
 
 def main():
 
-    sched = True
+    import schedule
+    from schedule import schedule
 
-    # Get authorizations
+# Get authorizations
 
     auth_dict = creds()
 
-    # Fresh tokens on program start
+# Fresh tokens on program start
 
     ecobee_token_response = ecobee_tokens(True, datetime.datetime.min)
 
     auth = ecobee_token_response[0]
     last_refresh_time = ecobee_token_response[1]
 
-    #  Set up Ohmconnect call
+#  Set up Ohmconnect call
 
     http = urllib3.PoolManager(cert_reqs='CERT_REQUIRED', ca_certs=certifi.where())
 
     oc = [False]
 
-    # Initial ecobee API call to populate room class
-    # TODO - refactor Ecobee API call and error handling (make consistent) as function
-
-    # timestamp for error message
+# initial timestamp
 
     timestamp = '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
+
+# Initial ecobee API call to populate room class
+# TODO - refactor Ecobee API call and error handling (make consistent) as function
+# TODO - Use /thermostatSummary URL to get Runtime Revision and refresh only when this changes
 
     try:
 
@@ -66,12 +73,10 @@ def main():
 
     data = response.json()
 
-    # Build temperature sensor dictionary
+# Discover all temperature sensors
 
     tempdict = get_sensors(data)
     sensornames = list(tempdict.keys())
-
-#    print(tempdict)
 
     if len(tempdict) == 0:
 
@@ -82,18 +87,10 @@ def main():
 
         pass
 
-    #  Discover smart plug names and IP addresses.  Names of rooms, sensors, and plugs must match.
+# Discover all plugs TODO consolidate into getplugs so it returns a dictionary of valid plug objects
 
     plugip = {}
     plugnames = []
-
-    mbed_plug = SmartPlug('0.0.0.0')
-    obed_plug = SmartPlug('0.0.0.0')
-    lbed_plug = SmartPlug('0.0.0.0')
-
-    plugdict = {'MBED': mbed_plug, 'OBED': obed_plug, 'LBED': lbed_plug}
-
-    # Discover all plugs
 
     named_flag = False
 
@@ -105,95 +102,112 @@ def main():
 
     named_flag = True
 
-    # Assign ip addresses to controlled plugs.
-    # Must match the plug's assigned names (in Kasa app) to the plug object name.
+    plugdict = {}
 
-    try:
-        mbed_plug = SmartPlug(plugip['MBED'])
-    except:
-        pass
-    try:
-        obed_plug = SmartPlug(plugip['OBED'])
-    except:
-        pass
-    try:
-        lbed_plug = SmartPlug(plugip['LBED'])
-    except:
-        pass
+    for name in plugip:
 
-    # Create list of valid rooms with both active sensors and plugs
+        try:
+
+            plugdict[name] = SmartPlug(plugip[name])
+
+        except:
+
+            pass
+
+# Create list of valid rooms with both active sensors and plugs
 
     namelist = set(sensornames).intersection(plugnames)
 
-    # Define Room class
+# Define Room class
 
     class Room:
 
-        def __init__(self, name, temp, status, temp_high, temp_low, on_from, on_to):
+        def __init__(self, name, temp, status, temp_high, temp_low):
             self.name = name
             self.temp = temp
             self.status = status
             self.temp_high = temp_high
             self.temp_low = temp_low
-            self.on_from = on_from
-            self.on_to = on_to
 
-    # Initialize schedule and temperature band
-    # Temp setpoints in F.
-    # temp_high is top of setpoint deadband, temp_low is bottom of deadband
-    # Time setpoints in decimal hours, 24 hour time
-    # Note:  All time logic here assumes start after noon and end before noon!
+# Initialize schedule and temperatures
 
-    mbed = Room('MBED', tempdict['MBED'], 'OFF', 66.6, 66.4, 20.5, 7.5)
-    lbed = Room('LBED', tempdict['LBED'], 'OFF', 66.6, 66.4, 19.75, 7.5)
-    obed = Room('OBED', tempdict['OBED'], 'OFF', 66.6, 66.4, 19.75, 7.5)
+    deadband = 0.2
 
-    # Define setback temperature for Ohmhour DR event.  Must be a negative number.
+    setdict = setpoints(timestamp)
 
-    setback = -3.0
+# Define rooms and room dictionary
 
-    # Define rooms and room dictionary
-
-    roomdict = {'MBED': mbed, 'LBED': lbed, 'OBED': obed}
-
-    # Initialize schedule bounds -- the earliest start and latest end of schedule for all rooms
-    # Used to determine when in active vs. sleep mode overall
-
-    start_time = mbed.on_from
-    end_time = mbed.on_to
+    roomdict = {}
 
     for name in namelist:
 
-        if roomdict[name].on_from < start_time:
+        roomdict[name] = Room(name, tempdict[name], 'OFF', setdict[name]+deadband, setdict[name])
 
-            start_time = roomdict[name].on_from
+# Define setback temperature for Ohmhour DR event.  Must be a negative number.
 
-        if roomdict[name].on_to > end_time:
+    setback = -3.0
 
-            end_time = roomdict[name].on_to
-
-# Initialize error counter
+# Initialize error counter & loop status
 
     sensor_error_count = 0
 
-    # Start main loop
+    last_loop_sched = True
+
+# Get last schedule modification time
+
+    mtime = os.path.getmtime('schedule.py')
+
+# Start main loop
 
     while True:
 
-        # Token refresh
+# Automatically reload schedule to capture changes
+
+        mtime_now = os.path.getmtime('schedule.py')
+
+        if mtime_now != mtime:
+
+            importlib.reload(sys.modules['schedule'])
+            from schedule import schedule
+            print("Schedule Updated")
+
+        else:
+
+            pass
+
+        mtime = mtime_now
+
+# Token refresh
 
         ecobee_token_response = ecobee_tokens(False, last_refresh_time)
 
         last_refresh_time = ecobee_token_response[1]
 
-        # time handling
+# time handling
 
         timestamp = '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
-        dectime = float(timestamp[11:13]) + float(timestamp[14:16]) / 60
 
-        # Portion of loop inside schedule bounds
+# Determine Schedule or Sleep mode
 
-        while dectime >= start_time or dectime <= end_time:
+        setdict = setpoints(timestamp)
+
+        setvals = []
+
+        for name in namelist:
+
+            setvals.append(setdict[name])
+
+        if len(setvals) == setvals.count(-999):
+
+            sched = False
+
+        else:
+
+            sched = True
+
+# Schedule (active) mode
+
+        if sched is True:
 
             # Token refresh
 
@@ -202,15 +216,9 @@ def main():
             auth = ecobee_token_response[0]
             last_refresh_time = ecobee_token_response[1]
 
-            # Time handling in loop
-
-            timestamp = '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
-            dectime = float(timestamp[11:13]) + float(timestamp[14:16]) / 60
-
-            sched = True
-
-            # Call EcoBee API to get data
-            # TODO refactor as function
+# Call EcoBee API to get data
+# TODO refactor to use thermostat Summary / Runtime Revision and change wehn values update.
+# TODO at some point estimate temperature (ML?)
 
             try:
 
@@ -232,7 +240,7 @@ def main():
 
                 continue
 
-            #  Update temperature readings
+#  Update temperature readings with error handling
 
             tempdict = get_sensors(data)
 
@@ -272,7 +280,7 @@ def main():
 
                 pass
 
-            #  Get Ohmconnect status
+#  Get Ohmconnect status
 
             try:
 
@@ -298,7 +306,7 @@ def main():
 
                 oc_state = False
 
-            #TODO use dequeue insted
+# TODO use dequeue insted
 
             oc.insert(0,oc_state)
             last_oc = oc.pop()
@@ -315,201 +323,202 @@ def main():
 
                 offset = -setback
 
+            plug_err = {}
+
             for name in namelist:
+
+# Decision logic and set booleans for switches
+# Plug status is updated separately from state to reduce calls to plug endpoints
+# and allow rotation of heater operation per below
+# Determine Ohmconnect state and setback offset
 
                 roomdict[name].temp = tempdict[name]
 
-                # Decision logic and set booleans for switches
-                # Plug status is updated separately from state to reduce calls to plug endpoints
-                # and allow rotation of heater operation per below
-                # Determine Ohmconnect state and setback offset
+                roomdict[name].temp_low = setdict[name]
+                roomdict[name].temp_high = setdict[name]+deadband
 
                 roomdict[name].temp_high = roomdict[name].temp_high + offset
                 roomdict[name].temp_low = roomdict[name].temp_low + offset
 
-                # Temp issue debug statement
+#  Determine each room's status (On or Off)
 
-     #           print(name,' ','current temp: ',roomdict[name].temp,' upper: ',roomdict[name].temp_high,' lower: ',roomdict[name].temp_low)
+                if schedule(name,'All') is True:
 
-                #  Determine each room's status (On or Off)
+                    if roomdict[name].temp == 999:
 
-                if roomdict[name].temp == 'badvalue':
+                        print('Warning:  bad temp reading in ', name)
 
-                    print('Warning:  bad temp reading in ', name)
+                        roomdict[name].status = roomdict[name].status
 
-                    roomdict[name].status = roomdict[name].status
+                    elif roomdict[name].temp <= roomdict[name].temp_low:
 
-                elif roomdict[name].temp <= roomdict[name].temp_low \
-                        and (dectime >= roomdict[name].on_from or dectime <= roomdict[name].on_to):
+                        roomdict[name].status = "ON"
 
-                    roomdict[name].status = "ON"
+                    elif roomdict[name].temp > roomdict[name].temp_high:
 
-                elif roomdict[name].temp > roomdict[name].temp_high or dectime < roomdict[name].on_from \
-                        or dectime > roomdict[name].on_to:
+                        roomdict[name].status = "OFF"
+
+                    else:
+
+                        roomdict[name].status = roomdict[name].status
+
+                else:
 
                     roomdict[name].status = "OFF"
+                    print(name," Room Is Off")
+
+# Check & handle loss of communication with plugs
+
+                try:
+
+                    if name == 'OBED' or name == 'LBED':
+
+                        test_conn = plugdict[name].state() #Force poll
+
+                        plug_err[name] = False
+
+                    else:
+
+                        plugdict[name].state = roomdict[name].status
+                        plug_err[name] = False
+
+                except:
+
+                    plugip = get_plugs(plugip, plugnames, named_flag)[0]
+
+                    try:
+
+                        plugdict[name] = SmartPlug(plugip[name])
+
+                        test_conn = plugdict[name].state  # Force poll
+
+                        plug_err[name] = False
+
+                    except:
+
+                        plug_err[name] = True
+                        print("Communication error in ", name)
+
+# For LBED and OBED rooms determine which will operate when both are in ON state.
+# In my house two heaters are on a single circuit breaker.
+#  This breaker trips if both are running simultaneously.
+# The section is specific to this situation.
+
+# Determine plug states - this logic actually turns the plugs on or off.
+
+            if 'OBED' in plugdict and 'LBED' in plugdict:
+
+                if plug_err['OBED'] is False and plug_err['LBED'] is False:
+
+                    if roomdict['OBED'].temp < roomdict['LBED'].temp and roomdict['OBED'].temp != -999:
+
+                        lbed_turn = False
+
+                    else:
+
+                        lbed_turn = True
+
+                    if roomdict['OBED'].status == 'ON' and roomdict['LBED'].status == 'ON' and lbed_turn is True:
+
+                        plugdict['OBED'].state = 'OFF'
+                        sleep(5)
+                        plugdict['LBED'].state = 'ON'
+                        lbed_turn = False  # Variable is actually used due to looping
+
+                        roomdict['OBED'].status = 'OFF'
+
+                        statusmsg = 'Alternating obed OFF lbed ON'
+
+                    elif roomdict['OBED'].status == 'ON' and roomdict['LBED'].status == 'ON' and lbed_turn is False:
+
+                        plugdict['LBED'].state = 'OFF'
+                        sleep(5)
+                        plugdict['OBED'].state = 'ON'
+                        lbed_turn = True  # Variable is actually used due to looping
+
+                        roomdict['LBED'].status = 'OFF'
+
+                        statusmsg = 'Alternating obed ON lbed OFF'
+
+                    else:
+
+                        plugdict['OBED'].state = roomdict['OBED'].status
+                        plugdict['LBED'].state = roomdict['LBED'].status
+                        statusmsg = 'Normal'
+
+                elif plug_err['OBED'] is True and plug_err['LBED'] is False:
+
+                    plugdict['LBED'].state = roomdict['LBED'].status
+                    statusmsg = 'lbed per status  obed offline'
+
+                elif plug_err['LBED'] is True and plug_err['OBED'] is False:
+
+                    plugdict['OBED'].state = roomdict['OBED'].status
+                    statusmsg = 'obed per status lbed offline'
 
                 else:
 
-                    roomdict[name].status = roomdict[name].status
-
-            # Check & handle loss of communication with plugs
-
-            try:
-
-                mbed_plug.state = mbed.status
-            #   mbed_plug_err = False
-            #   Not currently used
-
-            except:
-
-                plugip = get_plugs(plugip, plugnames, named_flag)[0]
-
-                try:
-                    mbed_plug = SmartPlug(plugip['MBED'])
-                    print(mbed_plug)
-                #   mbed_plug_err = False
-                #   Not currently used
-
-                except:
-                    print('mbed plug error')
-                #   mbed_plug_err = True
-                #   Not currently used
-
-            try:
-
-                obed_plug_chk = obed_plug.state  # variable only used to force API call
-                obed_plug_err = False
-
-            except:
-
-                plugip = get_plugs(plugip, plugnames, named_flag)[0]
-
-                try:
-                    obed_plug = SmartPlug(plugip['OBED'])
-                    obed_plug_err = False
-                    print(obed_plug)
-
-                except:
-                    print('obed plug error')
-                    obed_plug_err = True
-
-            try:
-
-                lbed_plug_chk = lbed_plug.state  # variable only used to force API call
-                lbed_plug_err = False
-
-            except:
-
-                plugip = get_plugs(plugip, plugnames, named_flag)[0]
-
-                try:
-                    lbed_plug = SmartPlug(plugip['LBED'])
-                    lbed_plug_err = False
-                    print(lbed_plug)
-
-                except:
-                    print('lbed plug error')
-                    lbed_plug_err = True
-
-            # For LBED and OBED rooms determine which will operate when both are in ON state.
-            # In my house two heaters are on a single circuit breaker.
-            # This breaker trips if both are running simultaneously.
-            # The section is specific to this situation.
-
-            if obed.temp < lbed.temp:
-
-                lbed_turn = False
-
+                    statusmsg = 'obed and lbed offline'
             else:
 
-                lbed_turn = True
+                statusmsg = 'Normal'
 
-            # Determine plug states - this logic actually turns the plugs on or off.
+# Write console & log
 
-            if obed_plug_err is False and lbed_plug_err is False:
+            stat_str = "\n" + "Timestamp: " + str(timestamp) + "\n" +"\n"
+            log_str = str(timestamp) + ", "
 
-                if obed.status == 'ON' and lbed.status == 'ON' and lbed_turn is True:
+            for name in namelist:
 
-                    obed_plug.state = 'OFF'
-                    sleep(5)
-                    lbed_plug.state = 'ON'
-                    lbed_turn = False  # Variable is actually used due to looping
-                    statusmsg = 'Alternating obed OFF lbed ON'
+                stat_str += (str(name) + " Set: " + str(roomdict[name].temp_low) + " Temp: " +
+                          str(roomdict[name].temp) + " Heat: " + str(roomdict[name].status) + "\n")
 
-                elif obed.status == 'ON' and lbed.status == 'ON' and lbed_turn is False:
+                log_str  += (str(name) + ", " + str(roomdict[name].temp_low) + ", " +
+                          str(roomdict[name].temp) + ", " + str(roomdict[name].status) + ", ")
 
-                    lbed_plug.state = 'OFF'
-                    sleep(5)
-                    obed_plug.state = 'ON'
-                    lbed_turn = True  # Variable is actually used due to looping
-                    statusmsg = 'Alternating obed ON lbed OFF'
+            stat_str += ("Mode: " + statusmsg + "\n" + "Ohmconnect Status: " + str(oc_txt))
 
-                else:
+            log_str += ("Mode: " + statusmsg + ", " + "Ohmconnect Status: " + str(oc_txt) + "\n")
 
-                    obed_plug.state = obed.status
-                    lbed_plug.state = lbed.status
-                    statusmsg = 'Normal'
-
-            elif obed_plug_err is True and lbed_plug_err is False:
-
-                lbed_plug.state = lbed.status
-                statusmsg = 'lbed per status, obed offline'
-
-            elif lbed_plug_err is True and obed_plug_err is False:
-
-                obed_plug.state = obed.status
-                statusmsg = 'obed per status, lbed offline'
-
-            else:
-
-                statusmsg = 'obed and lbed offline'
-
-            # Write log -- TODO UPDATE ASSUMING HEADERS
-
-            log_str = (str(timestamp) + ", MBED, " + str(roomdict['MBED'].temp) + ", " + str(roomdict['MBED'].status) +
-                        ", OBED, " + str(roomdict['OBED'].temp) + ", " + str(roomdict['OBED'].status) +
-                        ", LBED, " + str(roomdict['LBED'].temp) + ", " + str(roomdict['LBED'].status) +
-                        ", Status" + ", " + statusmsg +
-                        ", OhmConnect Status" + ", " + oc_txt + "\n")
 
             log = open("log.txt", "a+")
             log.write(log_str)
             log.close()
 
-            # TODO REWORK TO MAKE MORE READABLE
+            print(stat_str + "\r")
 
-            print('Latest Timestamp: ', log_str + "\r")
+            last_loop_sched = True
 
-            sleep(looptime)
+# If outside of the schedule enter sleep mode.  No logging in sleep mode.
 
-    # If outside of the schedule enter sleep mode.  No logging in sleep mode.
-
-        if sched is True:
-
-            print('Sleep Mode')
-
-            # Turn all plugs off if possible
+        elif last_loop_sched is True and sched is False:
 
             for name in namelist:
 
-                if roomdict[name].status == 'ON':
+# Turn all plugs off if possible
 
-                    try:
+                try:
+
+                    if roomdict[name].status == 'ON':
 
                         plugdict[name].state = 'OFF'
                         roomdict[name].status = plugdict[name].state
-                        print(roomdict[name], 'turned off')
+                        print(name, 'turned off')
 
-                    except:
+                    else:
 
-                        overrun_warn_msg = str(
-                            'Warning, {0} offline -- could not be turned off automatically'.format(str(roomdict[name])))
+                        pass
 
-                        send_twilio_msg(overrun_warn_msg)
-                        print(overrun_warn_msg)
+                except:
 
-            sched = False
+                    overrun_warn_msg = str('Warning, {0} offline -- could not be turned off automatically'.format(name))
+
+                    send_twilio_msg(overrun_warn_msg)
+                    print(overrun_warn_msg)
+
+            print('Sleep Mode')
+
+            last_loop_sched = False
 
         else:
 
@@ -517,6 +526,7 @@ def main():
 
         sleep(looptime)
 
+        continue
 
 def get_plugs(plugip, plugnames, named_flag):
 
@@ -534,13 +544,45 @@ def get_plugs(plugip, plugnames, named_flag):
 
                 pass
 
-        return [plugip, plugnames]
+    except:
+
+        plugip = {}
+        plugnames = []
+        send_twilio_msg('Warning - plug discovery failed')
+        traceback.print_exc()
+
+
+    return [plugip, plugnames]
+
+def set_plug(name, state, plugdict, plugip, plugnames):
+
+# TODO Not currently used!  Trying to encapsulate state call & error checking to pull it out of main
+# This is a mess!  Need to consolidate get_plugs and probably put everything in a big dict to pass across fxns
+
+# name is the name of the room / plug
+# state is the desired state ('ON' or 'OFF')
+
+    named_flag = True
+
+    plugips = plugip
+
+    try:
+
+        plugdict[name].state = state
 
     except:
 
-        send_twilio_msg('plug discovery failed')
-        sys.exit('plug discovery failed')
+        plugips = get_plugs(plugips, plugnames, named_flag)[0]
 
+        try:
+
+            plugdict[name] = SmartPlug(plugips[name])
+
+        except:
+
+            print("Communication error in ", name)
+
+    return
 
 def get_sensors(data):
 
@@ -570,7 +612,7 @@ def get_sensors(data):
 
             except ValueError:
 
-                tval = 'badvalue'
+                tval = 999
 
             temps.append(tval)
 
@@ -636,8 +678,6 @@ def ecobee_tokens(loop_count_reset, last_refresh_time):
                 r_refresh = requests.post(token_url, params=payload)
 
                 r_refresh_dict = json.loads(r_refresh.text)
-
-                print(r_refresh_dict)
 
                 if r_refresh.status_code == requests.codes.ok:
 
@@ -717,9 +757,22 @@ def send_twilio_msg(alert_msg):
         to=twilio_to
     )
 
-    print(message.sid)
-
     return True
+
+
+def setpoints(timestamp):
+
+    from schedule import schedule
+
+    hourstart = int(float(timestamp[11:13]) + float(timestamp[14:16]) / 60)
+
+    mbed_tlow = schedule('MBED', hourstart)
+    lbed_tlow = schedule('LBED', hourstart)
+    obed_tlow = schedule('OBED', hourstart)
+
+    setdict = {'MBED': mbed_tlow, 'LBED': lbed_tlow, 'OBED': obed_tlow}
+
+    return setdict
 
 
 if __name__ == "__main__":
