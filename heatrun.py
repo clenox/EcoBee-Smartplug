@@ -27,6 +27,17 @@ def main():
     import schedule
     from schedule import schedule
 
+# Input variables
+
+# Determine which rooms are rotated (only allowed to be on one at a time)
+
+    rotate_plugnames = ['OBED', 'LBED']
+
+#  Temperature settings.  Setback is change in setting temp for Ohmhour DR event.  Must be a negative number.
+
+    deadband = 0.2
+    setback = -3.0
+
 # Get authorizations
 
     auth_dict = creds()
@@ -131,8 +142,6 @@ def main():
 
 # Initialize schedule and temperatures
 
-    deadband = 0.2
-
     setdict = setpoints(timestamp)
 
 # Define rooms and room dictionary
@@ -143,15 +152,13 @@ def main():
 
         roomdict[name] = Room(name, tempdict[name], 'OFF', setdict[name]+deadband, setdict[name])
 
-# Define setback temperature for Ohmhour DR event.  Must be a negative number.
-
-    setback = -3.0
-
 # Initialize error counter & loop status
 
     sensor_error_count = 0
 
     last_loop_sched = True
+
+    start_turn = 0
 
 # Get last schedule modification time
 
@@ -280,7 +287,8 @@ def main():
 
                 pass
 
-#  Get Ohmconnect status
+#  Get Ohmconnect status TODO use: get_OC(http)
+
 
             try:
 
@@ -306,7 +314,8 @@ def main():
 
                 oc_state = False
 
-# TODO use dequeue insted
+# Determine Ohmconnect state and setback offset
+# TODO use dequeue instead
 
             oc.insert(0,oc_state)
             last_oc = oc.pop()
@@ -323,14 +332,16 @@ def main():
 
                 offset = -setback
 
-            plug_err = {}
+# Decision logic and set booleans for switches
+# Plug status is updated separately from state to reduce calls to plug endpoints and allow rotation of heater operation
+
+            offline_list = []
+
+            rotate_active = rotate_plugnames
 
             for name in namelist:
 
-# Decision logic and set booleans for switches
-# Plug status is updated separately from state to reduce calls to plug endpoints
-# and allow rotation of heater operation per below
-# Determine Ohmconnect state and setback offset
+# Determine high and low setpoints for iteration based on deadband and offset
 
                 roomdict[name].temp = tempdict[name]
 
@@ -367,20 +378,32 @@ def main():
                     roomdict[name].status = "OFF"
                     print(name," Room Is Off")
 
-# Check & handle loss of communication with plugs
+# Update state for plugs in rotation
+
+                if not rotate_active:  # Handles the case of an empty rotate_active list
+
+                    pass
+
+                elif name in rotate_active:
+
+#                    print(rotate_active)  # For debugging
+
+                    status = roomdict[name].status
+
+                    plug_rotation_return = plug_rotation(rotate_active, plugdict, name, status, start_turn)
+
+                    roomdict[name].status = plug_rotation_return[0]
+                    rotate_active = plug_rotation_return[1]
+
+                else:
+
+                    pass
+
+#  Set plug state from status, with rediscovery on fail
 
                 try:
 
-                    if name == 'OBED' or name == 'LBED':
-
-                        test_conn = plugdict[name].state() #Force poll
-
-                        plug_err[name] = False
-
-                    else:
-
-                        plugdict[name].state = roomdict[name].status
-                        plug_err[name] = False
+                    plugdict[name].state = roomdict[name].status
 
                 except:
 
@@ -390,78 +413,13 @@ def main():
 
                         plugdict[name] = SmartPlug(plugip[name])
 
-                        test_conn = plugdict[name].state  # Force poll
-
-                        plug_err[name] = False
-
                     except:
 
-                        plug_err[name] = True
-                        print("Communication error in ", name)
+                        offline_list.append(name)
 
-# For LBED and OBED rooms determine which will operate when both are in ON state.
-# In my house two heaters are on a single circuit breaker.
-#  This breaker trips if both are running simultaneously.
-# The section is specific to this situation.
+            start_turn = plug_rotation_return[2]+1
 
-# Determine plug states - this logic actually turns the plugs on or off.
-
-            if 'OBED' in plugdict and 'LBED' in plugdict:
-
-                if plug_err['OBED'] is False and plug_err['LBED'] is False:
-
-                    if roomdict['OBED'].temp < roomdict['LBED'].temp and roomdict['OBED'].temp != -999:
-
-                        lbed_turn = False
-
-                    else:
-
-                        lbed_turn = True
-
-                    if roomdict['OBED'].status == 'ON' and roomdict['LBED'].status == 'ON' and lbed_turn is True:
-
-                        plugdict['OBED'].state = 'OFF'
-                        sleep(5)
-                        plugdict['LBED'].state = 'ON'
-                        lbed_turn = False  # Variable is actually used due to looping
-
-                        roomdict['OBED'].status = 'OFF'
-
-                        statusmsg = 'Alternating obed OFF lbed ON'
-
-                    elif roomdict['OBED'].status == 'ON' and roomdict['LBED'].status == 'ON' and lbed_turn is False:
-
-                        plugdict['LBED'].state = 'OFF'
-                        sleep(5)
-                        plugdict['OBED'].state = 'ON'
-                        lbed_turn = True  # Variable is actually used due to looping
-
-                        roomdict['LBED'].status = 'OFF'
-
-                        statusmsg = 'Alternating obed ON lbed OFF'
-
-                    else:
-
-                        plugdict['OBED'].state = roomdict['OBED'].status
-                        plugdict['LBED'].state = roomdict['LBED'].status
-                        statusmsg = 'Normal'
-
-                elif plug_err['OBED'] is True and plug_err['LBED'] is False:
-
-                    plugdict['LBED'].state = roomdict['LBED'].status
-                    statusmsg = 'lbed per status  obed offline'
-
-                elif plug_err['LBED'] is True and plug_err['OBED'] is False:
-
-                    plugdict['OBED'].state = roomdict['OBED'].status
-                    statusmsg = 'obed per status lbed offline'
-
-                else:
-
-                    statusmsg = 'obed and lbed offline'
-            else:
-
-                statusmsg = 'Normal'
+#            statusmsg = str(offline_list)+" Offline" #TODO bring statusmsg back
 
 # Write console & log
 
@@ -476,9 +434,11 @@ def main():
                 log_str  += (str(name) + ", " + str(roomdict[name].temp_low) + ", " +
                           str(roomdict[name].temp) + ", " + str(roomdict[name].status) + ", ")
 
-            stat_str += ("Mode: " + statusmsg + "\n" + "Ohmconnect Status: " + str(oc_txt))
+# TODO bring statusmsg back here too
 
-            log_str += ("Mode: " + statusmsg + ", " + "Ohmconnect Status: " + str(oc_txt) + "\n")
+#            stat_str += ("Mode: " + statusmsg + "\n" + "Ohmconnect Status: " + str(oc_txt))
+
+#            log_str += ("Mode: " + statusmsg + ", " + "Ohmconnect Status: " + str(oc_txt) + "\n")
 
 
             log = open("log.txt", "a+")
@@ -493,9 +453,9 @@ def main():
 
         elif last_loop_sched is True and sched is False:
 
-            for name in namelist:
-
 # Turn all plugs off if possible
+
+            for name in namelist:
 
                 try:
 
@@ -751,11 +711,17 @@ def send_twilio_msg(alert_msg):
 
     client = Client(twilio_sid, twilio_token)
 
-    message = client.messages.create(
-        from_=twilio_from,
-        body=alert_msg,
-        to=twilio_to
-    )
+    try:
+
+        message = client.messages.create(
+            from_=twilio_from,
+            body=alert_msg,
+            to=twilio_to
+        )
+
+    except:
+
+        print(alert_msg,'-- Sending SMS failed, check internet connection')
 
     return True
 
@@ -774,6 +740,86 @@ def setpoints(timestamp):
 
     return setdict
 
+
+def plug_rotation(rotate_plugnames, plugdict, plugname, plugstatus, start_turn):
+
+    turn = start_turn
+
+    plugnames = rotate_plugnames
+
+    if plugstatus == "OFF":
+
+        plugnames = plugnames.remove(plugname)
+        status = "OFF"
+
+        print('early return')
+
+        return status, plugnames, turn
+
+    else:
+
+        pass
+
+    if turn >= len(plugnames):
+
+        turn = 0
+
+    else:
+
+        pass
+
+    print(turn)
+
+    if plugname == plugnames[turn]:
+
+        try:
+
+            current = plugdict[plugname].state
+
+            if current == 'OFF':
+
+                status = 'ON'
+
+            else:
+
+                status = current
+
+        except:
+
+            print("Communications error in", plugname)
+            status = 'OFF'
+            plugnames[turn].remove()
+
+    else:
+
+        status = 'OFF'
+
+    return status, plugnames, turn
+
+def get_OC(http):
+
+    # Determine Ohmconnect state
+    # Retrieve unique Ohmconnect url from credentials module (note - you must modify this with your unique URL)
+
+    OC_state = 'Initialize'
+
+    OC_url = creds()['OC_url']
+
+    try:
+
+        r = http.request('GET', OC_url)
+
+        data = r.data
+
+        root = et.fromstring(data)
+
+        OC_state = root[1].text
+
+    except:
+
+        OC_state = 'False'
+
+    return OC_state
 
 if __name__ == "__main__":
 
