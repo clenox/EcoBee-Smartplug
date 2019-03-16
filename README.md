@@ -5,7 +5,7 @@ heatrun.py is used to control multiple electric space heaters on TPLink smartplu
 
 You are solely responsible for safe operation of your space heaters.  In particular, ensure that your heaters are configured to turn themselves off at a safe high limit temperature.  Do not depend on this program to do so.  This program is not intended to be "fail safe" and may crash / exit with the smart plugs turned on.
 
-The program will autodetect all controllable "rooms".  A "room" is defined by having both an Ecobee remote sensor and a smart plug with (exactly) the same name.  Just given the sensor and the plug the same name in the Ecobee and Kasa apps, respectively.  Note - this autodiscovery only works if run locally (inside LAN).  
+The program will autodetect all controllable "rooms".  A "room" is defined by having both an Ecobee remote sensor and a smart plug with (exactly) the same name.  Just give the sensor and the plug the same name in the Ecobee and Kasa apps, respectively.  Note - this autodiscovery only works if run locally (inside LAN).  
 
 Supports text message push for issues / events -- must have Twilio account to use this feature.
 
