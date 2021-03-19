@@ -1,4 +1,7 @@
 # EcoBee---TPLink-SmartPlug-Control
+
+**IMPORTANT NOTE -- THIS PROJECT VERSION IS OUT OF DATE AND MAY NO LONGER BE FUNCTIONAL.  CURRENTLY WORKING ON GETTING A NEW PUBLICLY AVAILABLE VERSION WITH SUBSTANTIALLY IMPROVED FEATURES UP ON GITHUB.  THANKS FOR YOUR PATIENCE!**
+
 Control TPLink smart plugs with EcoBee sensor data
 
 heatrun.py is used to control multiple electric space heaters on TPLink smartplugs based on temperature data from EcoBee remote sensors.
